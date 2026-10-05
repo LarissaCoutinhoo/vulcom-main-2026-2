@@ -108,4 +108,3 @@ controller.login = async function(req, res) {
 }
 
 export default controller
-```
