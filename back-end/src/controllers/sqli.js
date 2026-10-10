@@ -108,3 +108,5 @@ controller.login = async function(req, res) {
 }
 
 export default controller
+
+// esse commit seria dedicado a corrigir a vulnerabilidade de SQL Injection, como eu já havia corrigido, deixo esse comentário apenas para que seja possível o commit.
