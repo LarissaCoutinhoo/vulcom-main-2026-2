@@ -145,3 +145,4 @@ O seed inicial cria o usuário administrador com:
 
 Use essas credenciais na primeira autenticação da aplicação.
 
+
