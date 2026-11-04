@@ -1,181 +1,219 @@
+
 import prisma from '../database/client.js'
 import jwt from 'jsonwebtoken'
+import argon2 from 'argon2'
 
-const controller = {}     // Objeto vazio
+const controller = {}
 
+const hashOptions = {
+  type: argon2.argon2id,
+  memoryCost: 66560,
+  timeCost: 3,
+  parallelism: 4
+}
+
+// Cadastro de usuário
 controller.create = async function(req, res) {
   try {
+    const { password, ...data } = req.body
 
-    // OWASP Top 10:2025 A01 - Falha no Controle de Acesso:
-    // atribuição em massa permite ao cliente definir campos sensíveis, como is_admin.
-    // OWASP Top 10:2025 A04 - Falhas de Criptografia: password é persistido sem hash.
-    await prisma.user.create({ data: req.body })
+    if (typeof password !== 'string' || password.length === 0) {
+      return res.status(400).json({ error: 'Senha inválida' })
+    }
 
-    // HTTP 201: Created
+    const passwordHash = await argon2.hash(password, hashOptions)
+
+    await prisma.user.create({
+      data: {
+        ...data,
+        is_admin: false,
+        password: passwordHash
+      }
+    })
+
     res.status(201).end()
   }
   catch(error) {
     console.error(error)
-
-    // HTTP 500: Internal Server Error
     res.status(500).end()
   }
 }
 
+// Consultar todos os usuários
 controller.retrieveAll = async function(req, res) {
   try {
-    // OWASP Top 10:2025 A01 - Falha no Controle de Acesso:
-    // a consulta expõe todos os campos dos usuários, incluindo a senha em texto puro (A04).
-    const result = await prisma.user.findMany()
+    const result = await prisma.user.findMany({
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        is_admin: true
+      }
+    })
 
-    // HTTP 200: OK (implícito)
     res.send(result)
   }
   catch(error) {
     console.error(error)
-
-    // HTTP 500: Internal Server Error
     res.status(500).end()
   }
 }
 
+// Consultar um usuário
 controller.retrieveOne = async function(req, res) {
   try {
-    // OWASP Top 10:2025 A01 - Falha no Controle de Acesso:
-    // o ID recebido permite consultar qualquer usuário, incluindo seu campo password.
     const result = await prisma.user.findUnique({
-      where: { id: Number(req.params.id) }
+      where: { id: Number(req.params.id) },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        is_admin: true
+      }
     })
 
-    // Encontrou ~> retorna HTTP 200: OK (implícito)
     if(result) res.send(result)
-    // Não encontrou ~> retorna HTTP 404: Not Found
     else res.status(404).end()
   }
   catch(error) {
     console.error(error)
-
-    // HTTP 500: Internal Server Error
     res.status(500).end()
   }
 }
 
+// Atualizar usuário
 controller.update = async function(req, res) {
   try {
+    const { password, is_admin, ...data } = req.body
 
-    // OWASP Top 10:2025 A01 - Falha no Controle de Acesso:
-    // o cliente pode alterar is_admin e password de qualquer usuário por atribuição em massa.
-    // OWASP Top 10:2025 A04 - Falhas de Criptografia: a nova senha também é gravada sem hash.
-    const result = await prisma.user.update({
+    if(password !== undefined) {
+      if(typeof password !== 'string' || password.length === 0) {
+        return res.status(400).json({ error: 'Senha inválida' })
+      }
+
+      data.password = await argon2.hash(password, hashOptions)
+    }
+
+    await prisma.user.update({
       where: { id: Number(req.params.id) },
-      data: req.body
+      data
     })
 
-    // Encontrou e atualizou ~> HTTP 204: No Content
-    if(result) res.status(204).end()
-    // Não encontrou (e não atualizou) ~> HTTP 404: Not Found
-    else res.status(404).end()
+    res.status(204).end()
   }
   catch(error) {
-    console.error(error)
-
-    // HTTP 500: Internal Server Error
-    res.status(500).end()
+    if(error?.code === 'P2025') {
+      res.status(404).end()
+    }
+    else {
+      console.error(error)
+      res.status(500).end()
+    }
   }
 }
 
+// Excluir usuário
 controller.delete = async function(req, res) {
   try {
     await prisma.user.delete({
       where: { id: Number(req.params.id) }
     })
 
-    // Encontrou e excluiu ~> HTTP 204: No Content
     res.status(204).end()
   }
   catch(error) {
     if(error?.code === 'P2025') {
-      // Não encontrou e não excluiu ~> HTTP 404: Not Found
       res.status(404).end()
     }
     else {
-      // Outros tipos de erro
       console.error(error)
-
-      // HTTP 500: Internal Server Error
       res.status(500).end()
     }
   }
 }
 
+// Login
 controller.login = async function(req, res) {
   try {
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { username: req.body?.username || undefined },
+          { email: req.body?.email || undefined }
+        ]
+      }
+    })
 
-      // Busca o usuário no BD usando o valor dos campos
-      // "username" OU "email"
-      const user = await prisma.user.findFirst({
-        where: {
-          OR: [
-            { username: req.body?.username },
-            { email: req.body?.email }
-          ]
-        }
-      })
+    if(!user) return res.status(401).end()
 
-      // Se o usuário não for encontrado, retorna
-      // HTTP 401: Unauthorized
-      if(! user) return res.status(401).end()
+    const passwordIsValid = await argon2.verify(
+      user.password,
+      req.body?.password
+    )
 
-      // Usuário encontrado, vamos conferir a senha
-      // OWASP Top 10:2025 A07 - Falhas de Autenticação:
-      // a credencial fixa admin/admin123 ignora a senha cadastrada para esse usuário.
-      // OWASP Top 10:2025 A04 - Falhas de Criptografia:
-      // a comparação direta usa a senha armazenada em texto puro, sem hash adaptativo.
-      let passwordIsValid
-      if(req.body?.username === 'admin' && req.body?.password === 'admin123') passwordIsValid = true
-      else passwordIsValid = user.password === req.body?.password
+    if(!passwordIsValid) {
+      return res.status(401).end()
+    }
 
-      // Se a senha estiver errada, retorna
-      // HTTP 401: Unauthorized
-      if(! passwordIsValid) return res.status(401).end()
+    const { password, ...safeUser } = user
 
-      // Usuário e senha OK, passamos ao procedimento de gerar o token
-      // OWASP Top 10:2025 A04 - Falhas de Criptografia:
-      // o JWT inclui password; a assinatura garante integridade, mas não oculta o conteúdo.
-      const token = jwt.sign(
-        user,                       // Dados do usuário
-        process.env.TOKEN_SECRET,   // Senha para criptografar o token
-        { expiresIn: '24h' }        // Prazo de validade do token
-      )
+    const token = jwt.sign(
+      safeUser,
+      process.env.TOKEN_SECRET,
+      { expiresIn: '24h' }
+    )
 
-      // Formamos o cookie para enviar ao front-end
-      res.cookie(process.env.AUTH_COOKIE_NAME, token, {
-        httpOnly: true, // O cookie ficará inacessível para o JS no front-end
-        secure: true,   // O cookie será criptografado em conexões https
-        sameSite: 'None',
-        path: '/',
-        maxAge: 24 * 60 * 60 * 100  // 24h
-      })
+    res.cookie(process.env.AUTH_COOKIE_NAME, token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'None',
+      path: '/',
+      maxAge: 24 * 60 * 60 * 1000
+    })
 
-      // Retorna o token e o usuário autenticado com
-      // HTTP 200: OK (implícito)
-      // OWASP Top 10:2025 A04 - Falhas de Criptografia:
-      // a resposta também expõe a senha em texto puro no objeto user.
-      res.send({token, user})
-
+    res.send({
+      token,
+      user: safeUser
+    })
   }
   catch(error) {
     console.error(error)
-
-    // HTTP 500: Internal Server Error
     res.status(500).end()
   }
 }
 
+// Usuário autenticado
 controller.me = function(req, res) {
-  // Retorna as informações do usuário autenticado
-  // HTTP 200: OK (implícito)
   res.send(req?.authUser)
+}
+
+controller.migratePasswords = async function(req, res) {
+  try {
+    const users = await prisma.user.findMany()
+
+    for (const user of users) {
+      // Verifica se a senha já está em Argon2
+      if (!user.password.startsWith('$argon2id$')) {
+        const passwordHash = await argon2.hash(
+          user.password,
+          hashOptions
+        )
+
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { password: passwordHash }
+        })
+      }
+    }
+
+    res.send({
+      message: 'Migração das senhas concluída!'
+    })
+  }
+  catch(error) {
+    console.error(error)
+    res.status(500).end()
+  }
 }
 
 export default controller

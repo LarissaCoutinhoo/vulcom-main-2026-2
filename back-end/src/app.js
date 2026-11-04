@@ -14,8 +14,10 @@ import cors from 'cors'
 
 
 app.use(cors({
- origin: process.env.ALLOWED_ORIGINS.split(','),
- // credentials: true
+  origin: process.env.ALLOWED_ORIGINS
+    .split(',')
+    .map(origin => origin.trim()),
+  credentials: true
 }))
 
 
