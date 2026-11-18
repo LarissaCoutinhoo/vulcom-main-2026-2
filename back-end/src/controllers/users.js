@@ -187,6 +187,16 @@ controller.me = function(req, res) {
   res.send(req?.authUser)
 }
 
+controller.logout = function(req, res) {
+  res.clearCookie(process.env.AUTH_COOKIE_NAME, {
+    path: '/',
+    secure: true,
+    sameSite: 'None'
+  })
+
+  res.status(204).end()
+}
+
 controller.migratePasswords = async function(req, res) {
   try {
     const users = await prisma.user.findMany()
